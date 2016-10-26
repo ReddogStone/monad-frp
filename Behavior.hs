@@ -83,3 +83,7 @@ waitForB test = do
   x <- onceB
   if test x then return x else waitForB test
 
+
+whileB :: Monad m => Behavior a m Bool -> Behavior a m b
+whileB behavior =
+  behavior >>= (\result -> if result then whileB behavior else return undefined)

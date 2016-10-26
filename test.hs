@@ -1,11 +1,13 @@
-import Behavior
-import Signal
-import Control.Monad.State.Lazy
-import Data.Maybe
-
 import Control.Category
 import Control.Arrow
 import Prelude hiding (id, (.))
+
+import Control.Monad.State.Lazy
+import Data.Maybe
+
+import Behavior
+import Signal
+import qualified EventSignal as ES
 
 
 data FiniteHeadlessSignal i o r
@@ -30,27 +32,39 @@ toFiniteSignal lastSignal behavior =
       headless = toFiniteHeadlessSignal hs iteratee
 
 
-data Event
+data Message
   = Down
   | Up
   | Update Double
   deriving (Show, Read)
 
-isDown :: Event -> Bool
-isDown event = case event of Down -> True; _ -> False 
+isDown :: Message -> Bool
+isDown message = case message of (Down {}) -> True; _ -> False 
 
-isUp :: Event -> Bool
-isUp event = case event of Up -> True; _ -> False
+isUp :: Message -> Bool
+isUp message = case message of (Up {}) -> True; _ -> False
 
-isUpdate :: Event -> Bool
-isUpdate event = case event of (Update _) -> True; _ -> False
+isUpdate :: Message -> Bool
+isUpdate message = case message of (Update {}) -> True; _ -> False
+
+
+data Event
+  = StartPowerUp
+  | FinishPowerUp
+  deriving (Show, Eq)
+
+isStartPowerUp :: Event -> Bool
+isStartPowerUp event = case event of (StartPowerUp {}) -> True; _ -> False 
+
+isFinishPowerUp :: Event -> Bool
+isFinishPowerUp event = case event of (FinishPowerUp {}) -> True; _ -> False
 
 
 putB = effectB . put
-getB = effectB get
+sampleB = effectB get >>= (return . valueS)
 
 
-timeS :: Double -> Signal Event Double
+timeS :: Double -> Signal Message Double
 timeS start =
   Signal start (filtered >>> acc)
     where
@@ -60,12 +74,22 @@ timeS start =
         accumulateHS (\t maybeDt -> t + (fromMaybe 0 maybeDt)) start
 
 
+update f =
+  whileB $ do
+    (Update dt) <- waitForB isUpdate
+    s <- sampleB
+    return $ f s dt
+
+
 test = toFiniteSignal (constS 10) $ do
   waitForB isDown
   putB $ timeS 20
-  waitForB isUp
-  s <- getB
-  return (valueS s)
+  firstBL
+    [
+      update (\s _ -> s < 30),
+      waitForB isUp
+    ]
+  sampleB
 
 
 main :: IO ()
@@ -78,4 +102,4 @@ main = main' test
           putStrLn $ "Finished " ++ (show result)
         Run feed -> do
           s <- getLine
-          main' (feed (read s :: Event))
+          main' (feed (read s :: Message))
