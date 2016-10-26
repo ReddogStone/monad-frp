@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleContexts #-}
+
 import Control.Category
 import Control.Arrow
 import Prelude hiding (id, (.))
@@ -17,18 +19,18 @@ data FiniteHeadlessSignal i o r
 data FiniteSignal i o r
   = FiniteSignal o (FiniteHeadlessSignal i o r)
 
-toFiniteHeadlessSignal :: (HeadlessSignal i o) -> (Iteratee i (State (Signal i o)) r) -> FiniteHeadlessSignal i o r
+toFiniteHeadlessSignal :: (ES.HeadlessEventSignal e i o) -> (Iteratee i (State (ES.EventSignal e i o)) r) -> FiniteHeadlessSignal i o r
 toFiniteHeadlessSignal _ (Done result) =
   Finish result
-toFiniteHeadlessSignal (Headless next) (Cont feed) =
-  Run (\x -> toFiniteSignal (next x) (feed x))
+toFiniteHeadlessSignal headless (Cont feed) =
+  Run (\x -> toFiniteSignal (ES.feedInputHS headless x) (feed x))
 
 
-toFiniteSignal :: (Signal i o) -> (Behavior i (State (Signal i o)) r)-> FiniteSignal i o r
+toFiniteSignal :: (ES.EventSignal e i o) -> (Behavior i (State (ES.EventSignal e i o)) r)-> FiniteSignal i o r
 toFiniteSignal lastSignal behavior =
   FiniteSignal output headless
     where
-      (iteratee, (Signal output hs)) = runState (runBehavior behavior) lastSignal
+      (iteratee, (ES.Running output hs)) = runState (runBehavior behavior) lastSignal
       headless = toFiniteHeadlessSignal hs iteratee
 
 
@@ -49,7 +51,7 @@ isUpdate message = case message of (Update {}) -> True; _ -> False
 
 
 data Event
-  = StartPowerUp
+  = StartPowerUp Double
   | FinishPowerUp
   deriving (Show, Eq)
 
@@ -60,8 +62,8 @@ isFinishPowerUp :: Event -> Bool
 isFinishPowerUp event = case event of (FinishPowerUp {}) -> True; _ -> False
 
 
-putB = effectB . put
-sampleB = effectB get >>= (return . valueS)
+emit event = effectB (modify (\s -> ES.feedEventS s event))
+sample = effectB get >>= (\(ES.Running value _) -> return value)
 
 
 timeS :: Double -> Signal Message Double
@@ -77,19 +79,37 @@ timeS start =
 update f =
   whileB $ do
     (Update dt) <- waitForB isUpdate
-    s <- sampleB
+    s <- sample
     return $ f s dt
 
 
-test = toFiniteSignal (constS 10) $ do
+-- test = toFiniteSignal (constS 10) $ do
+--   waitForB isDown
+--   putB $ timeS 20
+--   firstBL
+--     [
+--       update (\s _ -> s < 30),
+--       waitForB isUp
+--     ]
+--   sampleB
+
+
+world value = do
+  (_, StartPowerUp startValue) <- ES.untilS isStartPowerUp (constS value)
+  (value, _) <- ES.untilS isFinishPowerUp (timeS startValue)
+  world value
+
+
+test = toFiniteSignal (world 10) $ do
   waitForB isDown
-  putB $ timeS 20
+  emit $ StartPowerUp 20
   firstBL
     [
       update (\s _ -> s < 30),
       waitForB isUp
     ]
-  sampleB
+  emit $ FinishPowerUp
+  sample
 
 
 main :: IO ()
